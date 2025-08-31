@@ -1,10 +1,10 @@
 # lan-chat
 The application needs `npcap` to work!!  
 A chat application which supports 2 modes:  
-> lan-chat and wireless-chat
+> lan-chat and wireless-chat  
 It also supports message sending, group chat and P2P file transfer.
 ## mode `lan-chat`
-The chat room id is in $[0,65536)$, which supports 65536 lan chat rooms.
+The chat room id is in $[0,65536)$, which can hold up to 65536 chat rooms in the same LAN.
 ## mode `wireless-chat`
 This mode require `Microsoft Network Monitor` to work!!  
 It also require your net card to support `monitor` mode!!  
