@@ -17,9 +17,9 @@ The -11, -6 and -1 chat room id is the best choice.
 Note: the `jit` pyd has the same logic as `_jit.py` but written in C++ (whose code is in `a_main.cpp`), to support Nuitka building. (Nuitka doesn't support Numba)
 
 ## Features
- 1. hidden: In lan mode, it use IPSec message transfer and UDP broadcast discover to hide it's Network.(also uses randomized UDP data and fixed IPSec data size)
+ 1. hidden: In lan mode, it uses IPSec message transfering and UDP broadcast discovering to hide it's Network.(also uses randomized UDP data and fixed IPSec data size)
  2. safe: It uses ECDH handshaking and RSA plus AES encryption, which adds safety.
- 3. convenient: In wireless mode, it use RSBCH correction code, dynamic lengthing based on rssi and loss, as well as retransmission, in order to ensure data integrity.
+ 3. convenient: In wireless mode, it uses RS+BCH correction codes, dynamic lengthing based on rssi and loss, as well as retransmission, in order to ensure data integrity.
 
 ## Problems
 1. speed: The file send speed is very slow. (About 30KB/s)
