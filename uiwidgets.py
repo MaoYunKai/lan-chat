@@ -6,6 +6,11 @@ from tkinter.scrolledtext import ScrolledText
 import tkinter.filedialog
 import zlib,pyperclip
 import tmpfileplus,lzma
+import base64
+from PIL import Image,ImageTk
+from io import BytesIO
+from shot import previewShotBytes
+import threading,os
 class MyScrollbar(tkinter.Frame):
     def __init__(self, parent, orient=tkinter.VERTICAL, 
                  trough_color="#E1E1E1", 
@@ -268,10 +273,12 @@ class TkinterMessage2(tkinter.Frame):
         self.msg['wraplength']=self.winfo_width()-13
     def __ongconfig(self,e):
         self['height']=self.innerF.winfo_height()
+class SendingFile():
+    pass
 class FileView(tkinter.Frame):
     @staticmethod
     def createVirtualFile(filename,data,p=None):
-        class _Tmp():
+        class _Tmp(SendingFile):
             @property
             def name(self):
                 return filename
@@ -302,6 +309,7 @@ class FileView(tkinter.Frame):
         else:
             ss = f'{s/1073741824:.2f}GB'
         tkinter.Label(self,text=ss).grid(row=1,column=0)
+        self.__lab = '上传中' if isinstance(file,SendingFile) else '下载中'
         self.__f = file
         self.__saved = None
         self.__downsta = tkinter.Label(self)
@@ -319,7 +327,7 @@ class FileView(tkinter.Frame):
             tkinter.Button(self,text='预览',command=self.__preview).grid(row=2,column=0,sticky='ew')
             tkinter.Button(self,text='保存',command=self.__save).grid(row=2,column=1,sticky='ew')
         else:
-            self.__downsta['text']=f'下载中... {d*100/t:.2f}'
+            self.__downsta['text']=f'{self.__lab}... {d*100/t:.2f}%'
             self.__dpv.set(d*100/t)
             self.after(300,self.__upd)
     def __save(self):
@@ -329,12 +337,16 @@ class FileView(tkinter.Frame):
             f.write(self.__f.data)
         os.startfile(os.path.dirname(fn))
     def __preview__internal(self):
-        tmpfileplus.preview(os.path.splitext(self.__f.name)[1],self.__f.data)
+        ext = os.path.splitext(self.__f.name)[1]
+        if ext in ['.jpg','.jpeg','.png','.bmp']:
+            previewShotBytes(self.__f.data,'preview: '+self.__f.name)
+        else:
+            tmpfileplus.preview(ext,self.__f.data)
     def __preview(self):
         if self.__saved is not None:
             os.startfile(self.__saved)
         else:
-            threading.Thread(target=__preview__internal).start()
+            threading.Thread(target=self.__preview__internal).start()
 class ScrollbarManager():
     def __init__(self,sb,
                  contentSizeGetter,
@@ -487,3 +499,61 @@ class ScrollableFrame(tkinter.Frame):
         self.update_scroll()
     def update_layout(self):
         self.update_scroll()
+def b64iwid(widget):
+    class _w(widget):
+        def __init__(self,*a,imagebase64=None,**kw):
+            self.__ib64=None
+            if imagebase64 is not None:
+                self.__ib64 = imagebase64
+                img = Image.open(BytesIO(base64.b64decode(imagebase64)))
+                self.__photo = ImageTk.PhotoImage(img)
+                kw['image']=self.__photo
+            super().__init__(*a,**kw)
+        def __setitem__(self,key,val):
+            if key=='imagebase64':
+                self.__ib64 = val
+                img = Image.open(BytesIO(base64.b64decode(val)))
+                self.__photo = ImageTk.PhotoImage(img)
+                super().__setitem__('image',self.__photo)
+            else:
+                super().__setitem__(key,val)
+        def __getitem__(self,key):
+            if key=='imagebase64':
+                return self.__ib64
+            else:
+                return super().__getitem__(key)
+    return _w
+Base64ImageButton=b64iwid(tkinter.Button)
+Base64ImageMenubutton=b64iwid(tkinter.Menubutton)
+Base64ImageLabel=b64iwid(tkinter.Label)
+base64_snapscr='/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAAdAB8DASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD3SiisC/nuPD9xLfs8lxpkrZmRmy0BJ+8ueq+3btTEb9FYWmSXet3MeqyPJb2C5Nrbq2DJ23vj9FrdoAZKXELmIBpAp2g9Ce1cPY41HUdK33V5e3IkMl7a3AIjhIB524wMNjHrXd0UAcDITp1zfx211d21+t5m1sYs+VIpIwduMEHnPPFd9RRQB//Z'
+base64_fileupl='/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAAfACEDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD3SmGWNThnUH0Jp9cdo+laJL4ai1TVLaFmId5p5ckn5jyfU0xHY0VyWkxzXOnNNomuulmhJW3mt1dou+0knOPT2rf0a+fUtGtLyRQrzRhmC9M0AXqKKKACuO0rVNHtdCt9N1Y7ZoGO+GWB22sHJHbFdjRQByOlavoem6WsAuVa5MQSR44JBvIzj+HnrW14bgltvDlhDMhSRYRuVuorUooAKKKKAP/Z'
+base64_morebut='/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAAdACEDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD3Siis9dd0x7O4u0vI2gt22yuM4U/1/CmI0KKovrOnRrZs92gW8IFuefnzj8uo61eoAKKKKACqi6XYJbzW62cAhnJaVAgw5Pc1booArNp1k624a1hItiDCCg/d/T0qzRRQAUUUUAf/2Q=='
+class MenuBar(tkinter.Frame):
+    def __init__(self,*a,command=None,**kw):
+        super().__init__(*a,**kw)
+        self.__command=command
+        self.__snap = Base64ImageButton(self,imagebase64=base64_snapscr,bd=0,command=self.__dosnap)
+        self.__upl = Base64ImageButton(self,imagebase64=base64_fileupl,bd=0,command=self.__doupl)
+        self.__more = Base64ImageMenubutton(self,imagebase64=base64_morebut)
+        self.__menu = tkinter.Menu(self.__more,tearoff=False)
+        self.__menu.add_command(label="清空聊天记录",command=self.__clearhistory)
+        self.__menu.add_command(label="隐藏到托盘",command=self.__hide)
+        self.__menu.add_command(label="退出",command=self.__quit)
+        self.__more['menu']=self.__menu
+        self.__snap.grid(row=0,column=0)
+        self.__upl.grid(row=0,column=1)
+        self.__more.grid(row=0,column=2)
+    def __quit(self):
+        self.__call_command("quit")
+    def __hide(self):
+        self.__call_command("hide")
+    def __clearhistory(self):
+        self.__call_command("clear_history")
+    def __dosnap(self):
+        self.__call_command("screen_shot")
+    def __doupl(self):
+        self.__call_command("upload_file")
+    def __call_command(self,cmd):
+        if self.__command is not None:
+            self.__command(cmd)

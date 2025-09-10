@@ -4,7 +4,7 @@ from math import erfc,sqrt
 from wlhlp import NmCapture,wl_sendp,pack_wl_data,unpack_wl_data,setchannel2,override_faces
 from bufq import ThreadSafeBuffer
 import functools, weakref, traceback
-from hichann import sdh_hash, AESGCM
+from hichann import sdh_hash, rng_encrypt, rng_decrypt
 from concurrent.futures import ThreadPoolExecutor
 from jit import *
 class PacketSizeMgr():
@@ -73,8 +73,7 @@ class Wireless_packet(Packet):
         try:
             aaa,=struct.unpack(">Q",p[-8:])
             k=p[:16]
-            g = AESGCM(hashlib.md5(hashlib.sha1(b'WLPacketEncryption'+k).digest()+p[-8:]).digest())
-            d = g.decrypt(k,p[16:-8],None)
+            d = rng_decrypt(p[16:-8],k)
             h = sdh_hash(d,k)
             aaa ^= h*2718281
             p=k+d+struct.pack(">Q",aaa)
@@ -90,8 +89,7 @@ class Wireless_packet(Packet):
         h = sdh_hash(p[16:-8],k)
         aaa ^= h*2718281
         fi = struct.pack(">Q",aaa)
-        g = AESGCM(hashlib.md5(hashlib.sha1(b'WLPacketEncryption'+k).digest()+fi).digest())
-        enc = g.encrypt(k,p[16:-8],None)
+        enc = rng_encrypt(p[16:-8],k)
         return k+enc+fi
 class WirelessTransportBase():
     __slots__=(

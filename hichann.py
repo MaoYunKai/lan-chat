@@ -5,6 +5,18 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePublicNumbers,SECP256R1
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicNumbers
 from jit import *
+from rng import encrypt as _rng_encrypt, RandomGen as rng_rdm
+def rng_encrypt(data,key):
+    assert len(key) == 16
+    encrypted = _rng_encrypt(data+struct.pack(">I",zlib.crc32(data)),key)
+    return encrypted
+def rng_decrypt(data,key):
+    assert len(key) == 16
+    decrypted = _rng_encrypt(data,key)
+    res = decrypted[:-4]
+    if struct.unpack(">I",decrypted[-4:])[0] != zlib.crc32(res):
+        raise ValueError("data not decrypted.")
+    return res
 def sdh_hash(data,sec):#(data, 16_bytes_sec)->nv_chk
     a=zlib.crc32(hashlib.md5(data,usedforsecurity=False).digest()+sec)&0xffffffff
     b=zlib.adler32(hashlib.sha1(data).digest()+sec)&0xffffffff
@@ -161,14 +173,28 @@ def safe_udp_hidden_reader(pkt):
     dl=((pkt[UDP].sport<<16)|pkt[UDP].dport)^(q&0xffffffff)
     dh=ip_hidden_reader(pkt)^(p&0xffffffff)
     return (dh<<32)|dl
+class Secp256R1Curve(Packet):
+    name='Curve'
+    fields_desc=[
+        LSBExtendedField('x',None),
+        LSBExtendedField('y',None)
+    ]
+class RSAPublicKey(Packet):
+    name="RSA Public Key"
+    fields_desc=[
+        LSBExtendedField('e',None),
+        LSBExtendedField('n',None)
+    ]
 def ec_public_number_pack(k):
-    return k.x.to_bytes(32,'big')+k.y.to_bytes(32,'big')
+    return bytes(Secp256R1Curve(x=k.x,y=k.y))
 def ec_public_number_load(d):
-    return EllipticCurvePublicNumbers(int.from_bytes(d[:32],'big'),int.from_bytes(d[32:],'big'),SECP256R1())
+    curve = Secp256R1Curve(d)
+    return EllipticCurvePublicNumbers(curve.x,curve.y,SECP256R1())
 def rsa_public_number_pack(n):
-    return n.n.to_bytes(256,'big')
+    return bytes(RSAPublicKey(e=n.e,n=n.n))
 def rsa_public_number_load(d):
-    return RSAPublicNumbers(65537,int.from_bytes(d,'big'))
+    pk = RSAPublicKey(d)
+    return RSAPublicNumbers(pk.e,pk.n)
 def safe_data_hide(mac_tgt,ip_tgt,key,data,key2=1145141919810):
     ippkt=IP(dst=ip_tgt,flags='DF')
     sec=os.urandom(16)
@@ -238,9 +264,7 @@ class SafeEspSocket():
             #data.show()
             data=bytes(data)
         key=os.urandom(16)
-        iv=os.urandom(12)
-        e=AESGCM(key)
-        mi=self.__fill(iv+e.encrypt(iv,data,None))
+        mi=self.__fill(rng_encrypt(data,key))
         k1,k2=struct.unpack(">QQ",key)
         p=safe_data_hide(self.__mac_tgt(self.__dest), self.__dest, k1, mi, key2=k2)
         sendp(p,socket=self.__sock,verbose=False)
@@ -261,10 +285,9 @@ class SafeEspSocket():
             k,mi,k2=d
             mi=self.__unfill(mi)
             hkey=struct.pack(">QQ",k,k2)
-            e=AESGCM(hkey)
             if self.__mac_s:
                 self.__mac_s(self.__dest,pkt[Ether].src)
-            self.__recv(e.decrypt(mi[:12],mi[12:],None))
+            self.__recv(rng_decrypt(mi,hkey))
         except:
             import traceback
             traceback.print_exc()

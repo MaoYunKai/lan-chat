@@ -1,0 +1,2 @@
+nuitka --standalone --mingw64 --lto=no --windows-console-mode=disable --remove-output --enable-plugin=tk-inter --nofollow-import-to=matplotlib --nofollow-import-to=PyQt5 --nofollow-import-to=requests --windows-uac-admin --force-stdout-spec={PROGRAM_BASE}.out.log --force-stderr-spec={PROGRAM_BASE}.err.log "--output-dir=D:\mao\projectets\csp\tools\safe local chat\bin" "D:\mao\projectets\csp\tools\safe local chat\chat.py"
+pause

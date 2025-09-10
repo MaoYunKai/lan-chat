@@ -1,0 +1,30 @@
+# Project: Project1
+# Makefile created by Dev-C++ 5.11
+
+CPP      = g++.exe -D__DEBUG__
+CC       = gcc.exe -D__DEBUG__
+WINDRES  = windres.exe
+OBJ      = rngcmain.o
+LINKOBJ  = rngcmain.o
+LIBS     = -L"D:/Ã©ÔÆ¿­/±à³ÌC++/Dev-Cpp/MinGW64/lib" -L"D:/Ã©ÔÆ¿­/±à³ÌC++/Dev-Cpp/MinGW64/x86_64-w64-mingw32/lib" -static-libgcc -lgdi32 -loleaut32 -lwtsapi32 -lntdll -ladvapi32 -lws2_32 -luserenv -ldbghelp -m64 -g3
+INCS     = -I"D:/Ã©ÔÆ¿­/±à³ÌC++/Dev-Cpp/MinGW64/include" -I"D:/Ã©ÔÆ¿­/±à³ÌC++/Dev-Cpp/MinGW64/x86_64-w64-mingw32/include" -I"D:/Ã©ÔÆ¿­/±à³ÌC++/Dev-Cpp/MinGW64/lib/gcc/x86_64-w64-mingw32/4.9.2/include" -I"D:/Users/Administrator/AppData/Local/Programs/Python/Python311/include"
+CXXINCS  = -I"D:/Ã©ÔÆ¿­/±à³ÌC++/Dev-Cpp/MinGW64/include" -I"D:/Ã©ÔÆ¿­/±à³ÌC++/Dev-Cpp/MinGW64/x86_64-w64-mingw32/include" -I"D:/Ã©ÔÆ¿­/±à³ÌC++/Dev-Cpp/MinGW64/lib/gcc/x86_64-w64-mingw32/4.9.2/include" -I"D:/Ã©ÔÆ¿­/±à³ÌC++/Dev-Cpp/MinGW64/lib/gcc/x86_64-w64-mingw32/4.9.2/include/c++" -I"D:/Users/Administrator/AppData/Local/Programs/Python/Python311/include"
+BIN      = rngc.dll
+CXXFLAGS = $(CXXINCS) -m64 -g3 -fpermissive -O1 -O2 -O3 -std=c++14 -DBUILDING_DLL=1
+CFLAGS   = $(INCS) -m64 -g3 -fpermissive -O1 -O2 -O3 -std=c++14 -DBUILDING_DLL=1
+RM       = rm.exe -f
+DEF      = librngc.def
+STATIC   = librngc.a
+
+.PHONY: all all-before all-after clean clean-custom
+
+all: all-before $(BIN) all-after
+
+clean: clean-custom
+	${RM} $(OBJ) $(BIN) $(DEF) $(STATIC)
+
+$(BIN): $(LINKOBJ)
+	$(CPP) -shared $(LINKOBJ) -o $(BIN) $(LIBS) -Wl,--output-def,$(DEF),--out-implib,$(STATIC),--add-stdcall-alias
+
+rngcmain.o: rngcmain.cpp
+	$(CPP) -c rngcmain.cpp -o rngcmain.o $(CXXFLAGS)

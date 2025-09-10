@@ -232,12 +232,48 @@ class IcmpListenSock():
         return s
     def close(self):
         self.__sniffer.stop()
+class ChannelBasedTimeSec():
+    __slots__ = ('channel','timesec','rcv_timesec',
+                 'owner','__dict__','__weakref__')
+    def __init__(self,owner,channel):
+        self.owner=owner
+        self.channel = channel
+        self.timesec = round(time.time()*100000)
+        self.rcv_timesec = 0
+    def getNext(self):
+        s=self.timesec
+        self.timesec += 1
+        return s
+    def getNextBuf(self):
+        return struct.pack(">HQ",self.channel,self.getNext())
+    def verify(self,t):
+        if t<=self.rcv_timesec:
+            raise ValueError("The message is expired")
+        self.rcv_timesec=t
+    def unlock(self,*a,**k):
+        self.owner.idle_queue.put(self)
+class ChannelBasedTimeSecs():
+    __slots__=('channels','idle_queue','__dict__','__weakref__')
+    def __init__(self,channels=10):
+        self.idle_queue=queue.Queue()
+        self.channels = [ChannelBasedTimeSec(self,i) for i in range(channels)]
+        for i in self.channels:
+            self.idle_queue.put(i)
+    def get(self):
+        p=self.idle_queue.get()
+        return p
+    def verify(self,buf):
+        a,b=struct.unpack(">HQ",buf)
+        self.channels[a].verify(b)
 class KeyExchange():
+    __slots__ = ('_key','_rkey','_hasher','_skey','_sk','_rrkey','_secs',
+                 '__dict__','__weakref__')
+    timesec_value=0
     def __init__(self):
         self._key = ec.generate_private_key(ec.SECP256R1())
         self._rkey = rsa.generate_private_key(public_exponent=65537,key_size=2048)
         self._hasher = argon2.PasswordHasher(memory_cost=128*1024)
-        self.timesec_value = 0
+        self._secs = ChannelBasedTimeSecs()
     def __comp(self,data):
         a=zlib.compressobj(level=9,wbits=-15,memLevel=9)
         return a.compress(data)+a.flush()
@@ -246,63 +282,115 @@ class KeyExchange():
     def keyToBytes(self):
         return hichann.ec_public_number_pack(self._key.public_key().public_numbers())
     def swapKey(self,data):
-        self._sk = AESGCM(self._key.exchange(ec.ECDH(),hichann.ec_public_number_load(data).public_key()))
+        self._skey = self._key.exchange(ec.ECDH(),hichann.ec_public_number_load(data).public_key())
+        self._sk = AESGCM(self._skey)
     def newKeyToBytes(self):
+        #8 bytes timesec
+        #16 bytes iv
+        #encoded data
         iv=os.urandom(16)
         data = hichann.rsa_public_number_pack(self._rkey.public_key().public_numbers())
-        enc = self._sk.encrypt(iv,data,None)
-        return iv+enc
+        timesec = struct.pack(">Q",int(time.time()*1000))
+        aes_key = base64.b64decode(self._hasher.hash(self._skey+timesec,salt=iv).split("$")[-1]+'=')
+        enc = AESGCM(aes_key).encrypt(iv,data,None)
+        return timesec+iv+enc
     def decodeKeyToBytes(self,data):
-        dec = self._sk.decrypt(data[:16],data[16:],None)
-        self._rrkey = hichann.rsa_public_number_load(dec).public_key()
-    def encryptData(self,data):
-        key=os.urandom(32)
-        iv=os.urandom(12)
-        timesec=struct.pack(">Q",int(time.time()*1000))
-        aes_key=self._hasher.hash(key+timesec,salt=iv).split("$")[-1]
-        aes_key += '='*((-len(aes_key))&3)
-        a=AESGCM(base64.b64decode(aes_key))
-        e=a.encrypt(iv,data,None)
-        ek=self._sk.encrypt(iv,self._rrkey.encrypt(key,padding.PKCS1v15()),None)
-        return timesec+iv+struct.pack(">I",len(e))+e+ek
-    def decryptData(self,data):
         timesec = data[:8]
         t = struct.unpack(">Q",timesec)[0]
-        if t <= self.timesec_value:
+        if t <= KeyExchange.timesec_value:
             raise ValueError("The message is expired")
-        self.timesec_value=t
-        iv = data[8:20]
-        data_size, = struct.unpack(">I",data[20:24])
-        e = data[24:24+data_size]
-        ek = data[24+data_size:]
-        key = self._rkey.decrypt(self._sk.decrypt(iv,ek,None),padding.PKCS1v15())
-        aes_key=self._hasher.hash(key+timesec,salt=iv).split("$")[-1]
-        aes_key += '='*((-len(aes_key))&3)
-        a=AESGCM(base64.b64decode(aes_key))
-        return a.decrypt(iv,e,None)
+        data=data[8:]
+        iv=data[:16]
+        aes_key = base64.b64decode(self._hasher.hash(self._skey+timesec,salt=iv).split("$")[-1]+'=')
+        dec = AESGCM(aes_key).decrypt(iv,data[16:],None)
+        self._rrkey = hichann.rsa_public_number_load(dec).public_key()
+    def encryptData(self,data):
+        iv=os.urandom(12)
+        enc = self._sk.encrypt(iv,data,None)
+        d=self._secs.get()
+        try:
+            timesec=d.getNextBuf()
+            sig = self._rkey.sign(data+timesec,padding.PKCS1v15(),hashes.SHA256())
+            return d,timesec+iv+struct.pack(">I",len(enc))+enc+sig
+        except:
+            d.unlock()
+            raise
+    def decryptData(self,data):
+        timesec = data[:10]
+        self._secs.verify(timesec)
+        iv = data[10:22]
+        data_size, = struct.unpack(">I",data[22:26])
+        enc = data[26:26+data_size]
+        sig = data[26+data_size:]
+        data = self._sk.decrypt(iv,enc,None)
+        self._rrkey.verify(sig,data+timesec,padding.PKCS1v15(),hashes.SHA256())
+        return data
+class AnyAddr(Packet):
+    name="ipv4&ipv6"
+    fields_desc=[
+        ByteEnumField("length",0x4,{0x4:"ipv4",0x10:"ipv6",0x6:"mac"}),
+        MultipleTypeField([
+            (
+                IPField("addr",None),
+                lambda pkt:pkt.length==0x4
+            ),
+            (
+                IP6Field("addr",None),
+                lambda pkt:pkt.length==0x10
+            ),
+            (
+                MACField('addr',None),
+                lambda pkt:pkt.length==0x6
+            )
+        ],
+        XStrLenField("addr",b"",length_from=lambda pkt:pkt.length)
+        )
+    ]
+    def __init__(self,*a,**k):
+        if 'ip' in k:
+            ipv=k.pop('ip')
+        else:
+            ipv=None
+        super().__init__(*a,**k)
+        if ipv is not None:
+            self.ip=ipv
+    @property
+    def ip(self):
+        return self.addr
+    @ip.setter
+    def ip(self,ipv):
+        if ':' in ipv:
+            self.length='ipv6'
+            self.addr=ipv
+        else:
+            self.length='ipv4'
+            self.addr=ipv
+    def extract_padding(self,s):
+        return b'',s
 class P2PData(Packet):
     #min size 19
     name="P2P Data"
     fields_desc=[
         IntField('filenamechksum',None),
         FieldLenField("conf_len", None, count_of="confirmed", fmt='B'),
-        FieldListField("confirmed", [], IPField('','127.0.0.1'), count_from=lambda pkt:pkt.conf_len),
-        XIntField('offset',0),
-        FieldLenField('len',None,length_of='data'),
+        PacketListField('confirmed', [], AnyAddr, count_from=lambda pkt:pkt.conf_len),
+        LSBExtendedField('offset',0),
+        LSBExtendedField('len',None),
         StrLenField('data','',length_from=lambda pkt:pkt.len),
         IntField('chksum',None)
     ]
     def self_build(self):
         if self.chksum is None:
             self.chksum = zlib.crc32(self.data)
+            self.len = len(self.data)
         return super().self_build()
 class P2PFileHeader(Packet):
     name="P2P Header"
     fields_desc=[
         FieldLenField('namelen',None,length_of='filename'),
         StrLenField('filename','',length_from=lambda pkt:pkt.namelen),
-        XIntField('filesize',0),
-        XIntField("realsize",0),
+        LSBExtendedField('filesize',0),
+        LSBExtendedField("realsize",0),
         IntField('filenamechksum',None)
     ]
     def self_build(self):
@@ -320,8 +408,11 @@ class SecureIcmpSocket():
         self.__s.sendMsg(self.__e.newKeyToBytes())
         self.__e.decodeKeyToBytes(self.__s.recvMsg())
     def send(self,data):
-        with self.__l:
-            self.__s.sendMsg(self.__e.encryptData(data))
+        d,e=self.__e.encryptData(data)
+        try:
+            self.__s.sendMsg(e)
+        finally:
+            d.unlock()
     def recv(self):
         return self.__e.decryptData(self.__s.recvMsg())
     def close(self):
@@ -371,8 +462,8 @@ class P2P_Manager():
     def onReceiveData(self,data):
         pkt = P2PData(data)
         ips = self.__ip_prov()
-        newcfm = pkt.confirmed+[self.__ip]
-        addrs = tuple(ips-newcfm)
+        newcfm = pkt.confirmed+[AnyAddr(ip=self.__ip)]
+        addrs = tuple(ips-set(map(lambda x:x.ip,newcfm)))
         if addrs:
             newIp=self.__rnd.choice(addrs)
             newPkt=P2PData(filenamechksum=pkt.filenamechksum,
@@ -404,12 +495,12 @@ class P2P_Manager():
         for ip in ips:
             self.__send_hdr(ip,bytes(hdr))
         ip_it=itertools.chain.from_iterable(map(lambda x:[random.shuffle(x),x][1],itertools.repeat(ips)))
-        chunk_size = min(max((len(data)+len(ips)-1)//len(ips),200),60000)
+        chunk_size = min(max((len(data)+len(ips)-1)//len(ips),200),max(500000,len(data)//100))
         fd = io.BytesIO(data)
         while (d:=fd.read(chunk_size)):
             self.__send_data(next(ip_it),
                              bytes(P2PData(filenamechksum=chk,
-                                           confirmed=[self.__ip],
+                                           confirmed=[AnyAddr(ip=self.__ip)],
                                            offset=fd.tell()-len(d),
                                            data=d)))
             if p_rec is not None:
@@ -467,6 +558,7 @@ class ChatRoom():
         self.__running = True
         self.__users = {}
         self.__inactive_users = conf.netcache.new_cache(f"chat_inactive_users_{chatroomId}", 60)
+        self.__errorLoggedIPs = set()
         #filter = 'arp or icmp'???
         self.__pol = ThreadPoolExecutor(5)
         self.__msgs = queue.Queue()
@@ -514,7 +606,9 @@ class ChatRoom():
                         pass
                 threading.Thread(target=self.__consume_thread,args=(p,sis)).start()
             except:
-                self.__msgs.put(("System",traceback.format_exc()))
+                if not p in self.__errorLoggedIPs:
+                    self.__errorLoggedIPs.add(p)
+                    self.__msgs.put(("System",traceback.format_exc()))
     def __process_msg(self,msg):
         typ=msg[0]
         if typ==0:
@@ -546,7 +640,9 @@ class ChatRoom():
                 self.__inactive_users[sis.remote_addr]=sis
                 if sis.closed:
                     break
-                self.__msgs.put(("System",traceback.format_exc()))
+                if not sis.remote_addr in self.__errorLoggedIPs:
+                    self.__errorLoggedIPs.add(sis.remote_addr)
+                    self.__msgs.put(("System",traceback.format_exc()))
     def __socket_guard_1(self,u):
         try:
             u.check_heartbeat()

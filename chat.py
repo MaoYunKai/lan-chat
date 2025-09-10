@@ -1,6 +1,10 @@
 import traceback
 from wlchatchan import *
 from uiwidgets import *
+from tray import SysTrayIcon,bind_methods
+from drag import DropManager
+from shot import takeShot,saveShot2Bytes
+import json,psutil
 
 class MainWindow():
     def __init__(self):
@@ -23,8 +27,10 @@ class MainWindow():
         self.tf.columnconfigure(1,weight=2)
         self.tf.columnconfigure(2,minsize=30,weight=1)
         self.message_count=0
+        self.tb = MenuBar(self.tk,command=self.handle_toolbar_command)
         self.bf = tkinter.Frame(self.tk)
         self._tf.pack(side='top',fill='both',expand=True)
+        self.tb.pack(side='top',fill='both')
         self.bf.pack(side='bottom',fill='both')
         self.tx = ScrolledText(self.bf,height=6)
         self.tx.bind("<Control-Return>",self._send)
@@ -36,6 +42,51 @@ class MainWindow():
         self.bf.columnconfigure(0,weight=1)
         self._r = threading.Thread(target=self._receiv_thread)
         self._r.start()
+        self.tk_deiconify = self.tk.deiconify
+        self._onminimize = lambda:[self.tk_deiconify(),self._minimize(),None][2]
+        self.tk.bind("<Unmap>", lambda event: self._onminimize() if self.tk.state() == 'iconic' else False)
+        self.exec = ThreadPoolExecutor(max_workers=1)
+        bind_methods(self.tk)
+        self.dm=DropManager(self.tk)
+        self.tk.bind("<<DropFiles>>", f'if {{"[{self.tk.register(self.handle_drop)} %d]" == "break"}} break\n')
+    def _minimize(self):
+        #print('minimize')
+        menu_options = ()
+        #print(self.tk.withdraw)
+        self.tk.withdraw()   #隐藏tk窗口
+        if not getattr(self,'SysTrayIcon',None):
+            self.SysTrayIcon = SysTrayIcon(
+                                        '',                             #图标
+                                        self.tk.title(),                #光标停留显示文字
+                                        menu_options,                   #右键菜单
+                                        on_quit = self._closew,         #退出调用
+                                        tk_window = self.tk,            #Tk窗口
+                                        )
+        self.exec.submit(self.SysTrayIcon.activation)
+    def handle_drop(self,files):
+        files=json.loads(files)
+        for f in files:
+            self._send_file(f)
+    def take_shot_internal(self):
+        sb=saveShot2Bytes(takeShot(self.tk))
+        n=str(uuid.uuid4())+'.jpeg'
+        p=self.room.sendfile(n,sb)
+        self.__post_msg(None,FileView.createVirtualFile(n,sb,p),1)
+    def handle_toolbar_command(self,command):
+        if command == 'quit':
+            self._closew()
+        elif command == 'hide':
+            self._minimize()
+        elif command == 'screen_shot':
+            self.tk.after(200,self.take_shot_internal)
+        elif command == 'upload_file':
+            fn = tkinter.filedialog.askopenfilename()
+            if fn and os.path.exists(fn):
+                self._send_file(fn)
+        elif command == 'clear_history':
+            for i in list(self.tf.children.values()):
+                i.grid_forget()
+            self.message_count=0
     def _send(self,*_):
         t = self.tx.get('0.0','end').strip()
         self.tx.delete('0.0','end')
@@ -96,6 +147,10 @@ class MainWindow():
         self.room.quit()
         self.tk.destroy()
     def run(self):
+        self.dm.install_hook()
         self.tk.mainloop()
+        #wait for exit and quit
+        time.sleep(1)
+        psutil.Process().kill()
 if __name__ == "__main__":
     MainWindow().run()
